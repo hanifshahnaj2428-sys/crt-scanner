@@ -20,20 +20,34 @@ pairs = {
 
 crt_tf = st.selectbox("CRT টাইমফ্রেম বেছে নিন:", ["1h", "4h"], index=0)
 
+def get_clean_data(ticker, period, interval):
+    df = yf.download(ticker, period=period, interval=interval, progress=False)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    return df
+
 def analyze_crt(ticker, crt_timeframe):
     try:
-        # ১. উচ্চতর টাইমফ্রেম থেকে আগের CRT ক্যান্ডেলের High ও Low নেওয়া
-        htf_data = yf.download(ticker, period="5d", interval=crt_timeframe, progress=False)
-        if len(htf_data) < 3:
+        # ১. উচ্চতর টাইমফ্রেমের ডেটা নেওয়া (4h হলে 1h থেকে রিস্যাম্পল করা হবে)
+        htf_data = get_clean_data(ticker, period="10d", interval="1h")
+        if htf_data.empty or len(htf_data) < 10:
             return "ডেটা পাওয়া যায়নি", "neutral", "-"
+            
+        if crt_timeframe == "4h":
+            htf_data = htf_data.resample("4h").agg({
+                'Open': 'first',
+                'High': 'max',
+                'Low': 'min',
+                'Close': 'last'
+            }).dropna()
         
-        # আগের ক্লোজ হওয়া ক্যান্ডেল
+        # আগের ক্লোজ হওয়া CRT ক্যান্ডেলের High ও Low
         prev_crt_high = float(htf_data['High'].iloc[-2])
         prev_crt_low = float(htf_data['Low'].iloc[-2])
         
         # ২. লোয়ার টাইমফ্রেম (15m) থেকে সুইপ, MSS এবং FVG চেক করা
-        ltf_data = yf.download(ticker, period="2d", interval="15m", progress=False)
-        if len(ltf_data) < 10:
+        ltf_data = get_clean_data(ticker, period="3d", interval="15m")
+        if ltf_data.empty or len(ltf_data) < 10:
             return "ডেটা অপর্যাপ্ত", "neutral", "-"
             
         recent_high = float(ltf_data['High'].iloc[-5:].max())
@@ -57,19 +71,21 @@ def analyze_crt(ticker, crt_timeframe):
         swept_high = recent_high > prev_crt_high
         swept_low = recent_low < prev_crt_low
         
+        decimals = 2 if ("GC=F" in ticker or "JPY" in ticker) else 5
+        
         if swept_high and current_close < swing_low and bearish_fvg:
-            return "🔴 SELL (CRT + MSS + FVG)", "sell", f"Entry Zone: {round(c3_high, 4)} - {round(c1_low, 4)}"
+            return "🔴 SELL (CRT + MSS + FVG)", "sell", f"Entry Zone: {round(c3_high, decimals)} - {round(c1_low, decimals)}"
         elif swept_low and current_close > swing_high and bullish_fvg:
-            return "🟢 BUY (CRT + MSS + FVG)", "buy", f"Entry Zone: {round(c1_high, 4)} - {round(c3_low, 4)}"
+            return "🟢 BUY (CRT + MSS + FVG)", "buy", f"Entry Zone: {round(c1_high, decimals)} - {round(c3_low, decimals)}"
         elif swept_high:
-            return "⚠️ CRT High সুইপ হয়েছে (MSS/FVG অপেক্ষায়)", "wait", f"CRT High: {round(prev_crt_high, 4)}"
+            return "⚠️ CRT High সুইপ হয়েছে (MSS/FVG অপেক্ষায়)", "wait", f"CRT High: {round(prev_crt_high, decimals)}"
         elif swept_low:
-            return "⚠️ CRT Low সুইপ হয়েছে (MSS/FVG অপেক্ষায়)", "wait", f"CRT Low: {round(prev_crt_low, 4)}"
+            return "⚠️ CRT Low সুইপ হয়েছে (MSS/FVG অপেক্ষায়)", "wait", f"CRT Low: {round(prev_crt_low, decimals)}"
         else:
-            return "⚪ কোনো সেটআপ নেই", "neutral", f"Range: {round(prev_crt_low, 4)} - {round(prev_crt_high, 4)}"
+            return "⚪ কোনো সেটআপ নেই", "neutral", f"Range: {round(prev_crt_low, decimals)} - {round(prev_crt_high, decimals)}"
             
     except Exception as e:
-        return "এরর হয়েছে", "neutral", "-"
+        return f"এরর: {str(e)}", "neutral", "-"
 
 # স্ক্যান বাটন
 if st.button("🔍 মার্কেট স্ক্যান করুন", use_container_width=True, type="primary"):
